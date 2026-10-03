@@ -19,3 +19,24 @@ void main() {
 )";
 
 const char* unmarked = R"(This remains a C++ string.)";
+
+#define FOVEATION_GLSL R"(vec2 foveation(vec2 uv) { return uv; })"
+// language=glsl
+const char* splicedShader = R"(
+#version 300 es
+precision mediump float;
+)" FOVEATION_GLSL R"(
+out vec4 color;
+void main() {
+    color = vec4(foveation(vec2(0.5)), 0.0, 1.0);
+}
+)";
+
+//language=glsl
+#define MY_GLSL R"(#version 320 es
+        precision mediump float;
+        flat out int vIndex;
+        void main() {
+            vIndex = gl_VertexID;
+        }
+)"

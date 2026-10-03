@@ -13,36 +13,48 @@ import com.intellij.psi.PsiComment
 import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
 import com.jetbrains.cidr.lang.psi.OCLiteralExpression
+import com.jetbrains.cidr.lang.psi.OCDefineDirective
+import com.jetbrains.cidr.lang.parser.OCLexerTokenTypes
+import com.jetbrains.cidr.lang.preprocessor.OCMacroForeignLeafElement
 import java.awt.Font
 
 /** Lexical highlighting only: Android Studio gates C++ injection hosts on an absent plugin. */
 class GlslRawStringAnnotator : Annotator {
     override fun annotate(element: PsiElement, holder: AnnotationHolder) {
-        val host = element as? OCLiteralExpression ?: return
-        if (!host.isStringLiteral) return
-        val raw = RawString.parse(host.text) ?: return
-        if (raw.delimiter != "glsl" && !hasMarker(host)) return
-        if (raw.content.isEmpty) return
+        val host = when (element) {
+            is OCLiteralExpression -> element.takeIf { it.isStringLiteral } ?: return
+            is OCDefineDirective -> element
+            else -> return
+        }
+        // C++ represents adjacent strings and intervening macro expansions as one host.
+        // Expansion leaves have synthetic ranges, so only annotate physical source tokens.
+        val fragments = host.node.getChildren(OCLexerTokenTypes.ALL_STRINGS)
+            .filterNot { it is OCMacroForeignLeafElement }
+            .mapNotNull { node -> RawString.parse(node.text)?.let { node to it } }
+        if (fragments.isEmpty()) return
+        if (fragments.none { (_, raw) -> raw.delimiter == "glsl" } && !hasMarker(host)) return
         val language = Language.findLanguageByID("GLSL") ?: return
         val highlighter = SyntaxHighlighterFactory.getSyntaxHighlighter(language, host.project, host.containingFile.virtualFile)
             ?: return
-        val body = raw.content.substring(host.text)
-        val base = host.textRange.startOffset + raw.content.startOffset
         val scheme = EditorColorsManager.getInstance().globalScheme
         // Explicit foreground prevents tokens with default colors inheriting C++ string green.
         val plain = TextAttributes(scheme.defaultForeground, null, null, null, Font.PLAIN)
-        val lexer = highlighter.highlightingLexer
-        lexer.start(body)
-        while (lexer.tokenType != null) {
-            ProgressManager.checkCanceled()
-            val range = TextRange(base + lexer.tokenStart, base + lexer.tokenEnd)
-            var attributes = plain
-            for (key in highlighter.getTokenHighlights(lexer.tokenType!!)) {
-                attributes = TextAttributes.merge(attributes, scheme.getAttributes(key))
+        for ((node, raw) in fragments) {
+            val body = raw.content.substring(node.text)
+            val base = node.startOffset + raw.content.startOffset
+            val lexer = highlighter.highlightingLexer
+            lexer.start(body)
+            while (lexer.tokenType != null) {
+                ProgressManager.checkCanceled()
+                val range = TextRange(base + lexer.tokenStart, base + lexer.tokenEnd)
+                var attributes = plain
+                for (key in highlighter.getTokenHighlights(lexer.tokenType!!)) {
+                    attributes = TextAttributes.merge(attributes, scheme.getAttributes(key))
+                }
+                holder.newSilentAnnotation(HighlightSeverity.INFORMATION)
+                    .range(range).enforcedTextAttributes(attributes).create()
+                lexer.advance()
             }
-            holder.newSilentAnnotation(HighlightSeverity.INFORMATION)
-                .range(range).enforcedTextAttributes(attributes).create()
-            lexer.advance()
         }
     }
 
@@ -51,9 +63,11 @@ class GlslRawStringAnnotator : Annotator {
         while (leaf != null) {
             val comment = PsiTreeUtil.getParentOfType(leaf, PsiComment::class.java, false)
             if (comment != null) return MARKER.matches(comment.text.trim())
+            // A marker belongs to one declaration/directive, even when a macro has no strings.
+            if (PsiTreeUtil.getParentOfType(leaf, OCDefineDirective::class.java, false) != null) return false
             val text = leaf.text
             // Stay within this expression; another literal cannot inherit a marker.
-            if (text.any { it == ';' || it == '{' || it == '}' || it == '"' || it == '\'' }) return false
+            if (text.startsWith("#") || text.any { it == ';' || it == '{' || it == '}' || it == '"' || it == '\'' }) return false
             leaf = PsiTreeUtil.prevLeaf(leaf)
         }
         return false

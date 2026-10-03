@@ -14,6 +14,95 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.jetbrains.cidr.lang.psi.OCLiteralExpression
 
 class GlslRawStringAnnotatorTest : BasePlatformTestCase() {
+    private fun checkDefine(prefix: String, delimiter: String = "", parameters: String = "") {
+        val body = "#version 320 es\nprecision mediump float;\nflat out int vIndex;\nvoid main() { vIndex = gl_VertexID; }\n"
+        val source = prefix + "#define MY_GLSL$parameters R\"$delimiter($body)$delimiter\"\n" +
+            "#define OTHER R\"(unmarked macro body)\"\n"
+        val file = myFixture.configureByText("shader.cpp", source)
+        val defines = PsiTreeUtil.findChildrenOfType(file, com.jetbrains.cidr.lang.psi.OCDefineDirective::class.java)
+            .sortedBy { it.textOffset }
+        assertEquals(2, defines.size)
+        val annotator = LanguageAnnotators.INSTANCE.allForLanguage(file.language)
+            .filterIsInstance<GlslRawStringAnnotator>().single()
+        val holder = AnnotationHolderImpl(AnnotationSession(file), false)
+        holder.runAnnotatorWithContext(defines.first(), annotator)
+        holder.assertAllAnnotationsCreated()
+        if (prefix.isEmpty() && delimiter.isEmpty()) {
+            assertTrue("Unmarked definitions should remain C++", holder.isEmpty())
+        } else {
+            assertFalse("GLSL inside a definition should be highlighted", holder.isEmpty())
+            val bodyStart = source.indexOf(body)
+            assertEquals(bodyStart, holder.first().startOffset)
+            assertEquals(bodyStart + body.length, holder.last().endOffset)
+            holder.zipWithNext().forEach { (a, b) -> assertEquals(a.endOffset, b.startOffset) }
+            assertTrue("Only raw-string content should receive GLSL colors", holder.all {
+                it.startOffset >= bodyStart && it.endOffset <= bodyStart + body.length
+            })
+            val keywordStart = source.indexOf("precision")
+            assertTrue("IDE daemon must highlight macro definitions", myFixture.doHighlighting().any {
+                it.startOffset == keywordStart && it.endOffset == keywordStart + "precision".length &&
+                    it.forcedTextAttributes != null
+            })
+        }
+        val other = AnnotationHolderImpl(AnnotationSession(file), false)
+        other.runAnnotatorWithContext(defines.last(), annotator)
+        assertTrue("Marker should not leak into the next macro", other.isEmpty())
+    }
+
+    fun testDefineWithCompactMarker() = checkDefine("//language=glsl\n")
+    fun testDefineWithGlslDelimiter() = checkDefine("", "glsl")
+    fun testFunctionLikeDefineWithMarker() = checkDefine("// language=glsl\n", parameters = "(argument)")
+    fun testUnmarkedDefineIgnored() = checkDefine("")
+    fun testMarkerDoesNotCrossEmptyDefine() {
+        checkHighlighting("//language=glsl\n#define EMPTY\nauto plain = R\"(unmarked)\";", listOf(null))
+    }
+
+    private fun checkConcatenation(prefix: String, firstDelimiter: String = "", macro: Boolean = true) {
+        val first = "precision mediump float;"
+        val last = "void main() { float x = 1.0; }"
+        val between = if (macro) " FOVEATION_GLSL " else " "
+        val source = "#define FOVEATION_GLSL R\"(vec2 foveation(vec2 uv) { return uv; })\"\n" +
+            prefix + "auto shader = R\"$firstDelimiter($first)$firstDelimiter\"" + between + "R\"($last)\";" +
+            "\nauto plain = R\"(unrelated text)\";"
+        val file = myFixture.configureByText("shader.cpp", source)
+        val hosts = PsiTreeUtil.findChildrenOfType(file, OCLiteralExpression::class.java)
+            .filter { it.isStringLiteral }.sortedBy { it.textOffset }
+        assertEquals(2, hosts.size)
+        val holder = AnnotationHolderImpl(AnnotationSession(file), false)
+        holder.runAnnotatorWithContext(hosts.first(), GlslRawStringAnnotator())
+        holder.assertAllAnnotationsCreated()
+        val ranges = listOf(first, last).map { body ->
+            val start = source.indexOf(body)
+            com.intellij.openapi.util.TextRange(start, start + body.length)
+        }
+        if (prefix.isEmpty() && firstDelimiter.isEmpty()) {
+            assertTrue("Unmarked concatenation must remain a C++ string", holder.isEmpty())
+        } else {
+            for (range in ranges) {
+                val annotations = holder.filter { it.startOffset >= range.startOffset && it.endOffset <= range.endOffset }
+                assertFalse("Each physical raw-string body must be highlighted", annotations.isEmpty())
+                assertEquals(range.startOffset, annotations.first().startOffset)
+                assertEquals(range.endOffset, annotations.last().endOffset)
+                annotations.zipWithNext().forEach { (a, b) -> assertEquals(a.endOffset, b.startOffset) }
+            }
+            assertTrue("Macro names and raw delimiters must remain C++", holder.all { annotation ->
+                ranges.any { annotation.startOffset >= it.startOffset && annotation.endOffset <= it.endOffset }
+            })
+            val numberStart = source.indexOf("1.0")
+            assertTrue("Daemon must highlight the shader after the macro splice", myFixture.doHighlighting().any {
+                it.startOffset == numberStart && it.endOffset == numberStart + 3 && it.forcedTextAttributes != null
+            })
+        }
+        val plainHolder = AnnotationHolderImpl(AnnotationSession(file), false)
+        plainHolder.runAnnotatorWithContext(hosts.last(), GlslRawStringAnnotator())
+        assertTrue("Marker must not leak past the declaration", plainHolder.isEmpty())
+    }
+
+    fun testMacroSpliceWithComment() = checkConcatenation("// language=glsl\n")
+    fun testMacroSpliceWithDelimiter() = checkConcatenation("", "glsl")
+    fun testAdjacentRawStringsWithComment() = checkConcatenation("// language=glsl\n", macro = false)
+    fun testUnmarkedMacroSpliceIgnored() = checkConcatenation("")
+
     private fun checkHighlighting(source: String, expected: List<String?>) {
         val file = myFixture.configureByText("shader.cpp", source)
         val hosts = PsiTreeUtil.findChildrenOfType(file, OCLiteralExpression::class.java)
