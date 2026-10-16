@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Share a `//language=glsl` marker or `glsl` delimiter across `+` concatenations,
+  such as `R"(...)" + COMMONS_GLSL + R"(...)"`.
+
 ## 0.1.2
 
 - Highlight GLSL raw strings inside object-like and function-like `#define` directives.

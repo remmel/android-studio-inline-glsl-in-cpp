@@ -168,6 +168,17 @@ class GlslRawStringAnnotatorTest : BasePlatformTestCase() {
             listOf("void main() {}"))
     }
 
+    fun testMarkerSpansOperatorConcatenation() {
+        checkHighlighting("struct S {\n    //language=glsl\n    static inline const std::string geom = R\"(#version 320 es\n)\"" +
+            " + COMMONS_GLSL + R\"(\nlayout(points) in;\n)\";\n};\nauto plain = R\"(a)\" + COMMONS_GLSL + R\"(b)\";",
+            listOf("#version 320 es\n", "\nlayout(points) in;\n", null, null))
+    }
+
+    fun testGlslDelimiterSpansOperatorConcatenation() {
+        checkHighlighting("auto shader = (R\"glsl(void main() {)glsl\" + commons) + R\"(})\";",
+            listOf("void main() {", "}"))
+    }
+
     fun testNearestUnrelatedCommentStopsMarker() {
         checkHighlighting("// language=glsl\n// documentation\nauto shader = R\"(void main() {})\";", listOf(null))
     }

@@ -1,4 +1,6 @@
 // Open this file in Android Studio after installing Inline GLSL.
+#include <string>
+
 const char* vertexShader = R"glsl(
 #version 300 es
 layout(location = 0) in vec3 position;
@@ -40,3 +42,16 @@ void main() {
             vIndex = gl_VertexID;
         }
 )"
+
+// language=glsl
+const std::string COMMONS_GLSL = R"(float luminance(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); })";
+// language=glsl
+const std::string concatenatedShader = R"(
+#version 300 es
+precision mediump float;
+)" + COMMONS_GLSL + R"(
+out vec4 color;
+void main() {
+    color = vec4(1.0);
+}
+)";

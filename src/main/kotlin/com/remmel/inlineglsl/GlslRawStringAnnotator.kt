@@ -12,7 +12,9 @@ import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiComment
 import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
+import com.jetbrains.cidr.lang.psi.OCBinaryExpression
 import com.jetbrains.cidr.lang.psi.OCLiteralExpression
+import com.jetbrains.cidr.lang.psi.OCParenthesizedExpression
 import com.jetbrains.cidr.lang.psi.OCDefineDirective
 import com.jetbrains.cidr.lang.parser.OCLexerTokenTypes
 import com.jetbrains.cidr.lang.preprocessor.OCMacroForeignLeafElement
@@ -28,11 +30,13 @@ class GlslRawStringAnnotator : Annotator {
         }
         // C++ represents adjacent strings and intervening macro expansions as one host.
         // Expansion leaves have synthetic ranges, so only annotate physical source tokens.
-        val fragments = host.node.getChildren(OCLexerTokenTypes.ALL_STRINGS)
-            .filterNot { it is OCMacroForeignLeafElement }
-            .mapNotNull { node -> RawString.parse(node.text)?.let { node to it } }
+        val fragments = rawStrings(host)
         if (fragments.isEmpty()) return
-        if (fragments.none { (_, raw) -> raw.delimiter == "glsl" } && !hasMarker(host)) return
+        // `R"(...)" + COMMONS + R"(...)"` splits into several literals; they share one marker.
+        val scope = concatenationRoot(host)
+        val siblings = if (scope === host) fragments
+        else PsiTreeUtil.findChildrenOfType(scope, OCLiteralExpression::class.java).flatMap(::rawStrings)
+        if (siblings.none { (_, raw) -> raw.delimiter == "glsl" } && !hasMarker(scope)) return
         val language = Language.findLanguageByID("GLSL") ?: return
         val highlighter = SyntaxHighlighterFactory.getSyntaxHighlighter(language, host.project, host.containingFile.virtualFile)
             ?: return
@@ -56,6 +60,16 @@ class GlslRawStringAnnotator : Annotator {
                 lexer.advance()
             }
         }
+    }
+
+    private fun rawStrings(host: PsiElement) = host.node.getChildren(OCLexerTokenTypes.ALL_STRINGS)
+        .filterNot { it is OCMacroForeignLeafElement }
+        .mapNotNull { node -> RawString.parse(node.text)?.let { node to it } }
+
+    private fun concatenationRoot(element: PsiElement): PsiElement {
+        var root = element
+        while (root.parent is OCBinaryExpression || root.parent is OCParenthesizedExpression) root = root.parent
+        return root
     }
 
     private fun hasMarker(host: PsiElement): Boolean {

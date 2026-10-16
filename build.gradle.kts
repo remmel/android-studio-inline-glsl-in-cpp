@@ -26,7 +26,7 @@ kotlin { jvmToolchain(25) }
 intellijPlatform {
     pluginConfiguration {
         name = "Inline GLSL"
-        version = "0.1.2"
+        version = "0.1.3"
         ideaVersion {
             sinceBuild = "262.9437"
             untilBuild = "262.*" // Only the locally tested Android Studio build family.
